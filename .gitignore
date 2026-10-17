@@ -1,0 +1,16 @@
+# PlatformIO build artifacts & cache
+.pio/
+.vscode/
+
+# Binary filesystem images (generated dynamically by flash_video.py)
+data/littlefs.bin
+
+# Python compiled bytecode & cache
+__pycache__/
+*.py[cod]
+
+# OS & Editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
