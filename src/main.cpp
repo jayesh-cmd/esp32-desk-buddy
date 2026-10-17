@@ -2,9 +2,13 @@
 #include <TFT_eSPI.h>
 #include <AnimatedGIF.h>
 #include <LittleFS.h>
+#include "idle_bg.h"
 
 #define GIF_W 128
 #define GIF_H 160
+
+// Time to stay on the idle screen between video plays (default: 20 minutes)
+const unsigned long IDLE_INTERVAL_MS = 20UL * 60UL * 1000UL;
 
 TFT_eSPI tft = TFT_eSPI();
 AnimatedGIF gif;
@@ -71,51 +75,39 @@ void GIFDraw(GIFDRAW *pDraw) {
   }
 }
 
-// ── Setup ──────────────────────────────────────────────────────────────────
-void setup() {
-  tft.init();
-  tft.setRotation(0);
-  tft.fillScreen(TFT_BLACK);
-
-  Serial.begin(115200);
-  delay(1000);
-  Serial.println("\n=== ESP32 GIF PLAYER BOOT ===");
-
-  if (!LittleFS.begin()) {
-    Serial.println("ERROR: LittleFS mount failed!");
-    tft.setTextColor(TFT_RED);
-    tft.drawString("FS MOUNT FAILED", 5, 50);
-    return;
+// ── Display Idle Screen ───────────────────────────────────────────────────
+void showIdleScreen() {
+  bool loaded = false;
+  if (LittleFS.exists("/idle.bin")) {
+    File f = LittleFS.open("/idle.bin", "r");
+    if (f && f.size() == sizeof(frameBuf)) {
+      f.read((uint8_t*)frameBuf, sizeof(frameBuf));
+      f.close();
+      loaded = true;
+    }
   }
-  Serial.println("LittleFS mounted OK.");
+  if (!loaded) {
+    memcpy_P(frameBuf, idle_bg, sizeof(frameBuf));
+  }
 
+  tft.startWrite();
+  tft.setAddrWindow(0, 0, GIF_W, GIF_H);
+  tft.pushColors(frameBuf, GIF_W * GIF_H, true);
+  tft.endWrite();
+}
+
+// ── Play Video Animation Once ──────────────────────────────────────────────
+void playVideoOnce() {
   if (!LittleFS.exists("/anim.gif")) {
     Serial.println("ERROR: /anim.gif not found in LittleFS!");
-    tft.setTextColor(TFT_YELLOW);
-    tft.drawString("NO /anim.gif", 5, 50);
     return;
   }
-
-  // Clear framebuffer to black
-  memset(frameBuf, 0, sizeof(frameBuf));
-
-  gif.begin(LITTLE_ENDIAN_PIXELS);
 
   if (!gif.open("/anim.gif", GIFOpenFile, GIFCloseFile, GIFReadFile, GIFSeekFile, GIFDraw)) {
     Serial.printf("ERROR: gif.open failed, code %d\n", gif.getLastError());
-    tft.setTextColor(TFT_RED);
-    tft.drawString("GIF OPEN FAILED", 5, 50);
     return;
   }
 
-  Serial.printf("GIF opened! Canvas: %dx%d\n", gif.getCanvasWidth(), gif.getCanvasHeight());
-  Serial.println("Starting animation loop...");
-}
-
-// ── Loop ───────────────────────────────────────────────────────────────────
-int cycleCount = 0;
-
-void loop() {
   int frameDelay = 0;
   int frameCount = 0;
   int rc = 1;
@@ -125,7 +117,6 @@ void loop() {
 
     rc = gif.playFrame(false, &frameDelay);
     if (rc >= 0) {
-      // Push updated framebuffer to TFT in one shot
       tft.startWrite();
       tft.setAddrWindow(0, 0, GIF_W, GIF_H);
       tft.pushColors(frameBuf, GIF_W * GIF_H, true);
@@ -133,11 +124,6 @@ void loop() {
 
       frameCount++;
 
-      if (frameCount % 20 == 0) {
-        Serial.printf("Cycle %d: frame %d (delay %d ms)\n", cycleCount + 1, frameCount, frameDelay);
-      }
-
-      // Frame rate control
       long elapsed = millis() - tStart;
       int targetDelay = (frameDelay > 0) ? frameDelay : 65;
       if (elapsed < targetDelay) {
@@ -145,22 +131,62 @@ void loop() {
       } else {
         yield();
       }
-    } else {
-      Serial.printf("playFrame error: %d\n", gif.getLastError());
-      break;
     }
   }
 
-  cycleCount++;
-  Serial.printf("Cycle %d completed (%d frames). Looping...\n", cycleCount, frameCount);
+  gif.close();
+  Serial.printf("Video playback complete (%d frames).\n", frameCount);
+}
 
-  if (rc < 0) {
-    Serial.printf("Recovering from error, re-opening GIF...\n");
-    gif.close();
-    delay(100);
-    gif.open("/anim.gif", GIFOpenFile, GIFCloseFile, GIFReadFile, GIFSeekFile, GIFDraw);
+// ── Setup ──────────────────────────────────────────────────────────────────
+void setup() {
+  tft.init();
+  tft.setRotation(0);
+  tft.fillScreen(TFT_BLACK);
+
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("\n=== ESP32 DESK BUDDY BOOT ===");
+
+  if (!LittleFS.begin()) {
+    Serial.println("WARNING: LittleFS mount failed (will use fallback idle background)");
   } else {
-    // Rewind GIF for next cycle
-    gif.reset();
+    Serial.println("LittleFS mounted OK.");
   }
+
+  gif.begin(LITTLE_ENDIAN_PIXELS);
+
+  // Show idle screen immediately on power-up
+  showIdleScreen();
+  Serial.println("Idle background active.");
+}
+
+// ── Loop ───────────────────────────────────────────────────────────────────
+int cycleCount = 0;
+
+void loop() {
+  // 1. Display full-screen idle background
+  showIdleScreen();
+  cycleCount++;
+  Serial.printf("\n[Cycle %d] Idle screen active. Waiting %lu minutes for next video...\n",
+                cycleCount, IDLE_INTERVAL_MS / 60000UL);
+
+  // 2. Wait for 20 minutes (with periodic serial heartbeat & watchdog feeding)
+  unsigned long startWait = millis();
+  unsigned long lastPrint = startWait;
+
+  while (millis() - startWait < IDLE_INTERVAL_MS) {
+    delay(500); // Yield & feed FreeRTOS idle task
+
+    // Print remaining time to serial every minute
+    if (millis() - lastPrint >= 60000UL) {
+      lastPrint = millis();
+      unsigned long remainingSec = (IDLE_INTERVAL_MS - (millis() - startWait)) / 1000UL;
+      Serial.printf("Next walk in %lu min %lu sec...\n", remainingSec / 60, remainingSec % 60);
+    }
+  }
+
+  // 3. Play video animation once
+  Serial.println("\n>>> Desk Buddy is walking! <<<");
+  playVideoOnce();
 }

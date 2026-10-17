@@ -109,6 +109,13 @@ def build_littlefs_image(gif_path, out_bin):
     with fs.open("/anim.gif", "wb") as f:
         f.write(data)
 
+    idle_bin = Path(gif_path).parent / "idle.bin"
+    if idle_bin.exists():
+        with open(idle_bin, "rb") as f:
+            with fs.open("/idle.bin", "wb") as f_out:
+                f_out.write(f.read())
+        print(f"🖼️  Added idle.bin ({idle_bin.stat().st_size} bytes) to LittleFS")
+
     with open(out_bin, "wb") as f:
         f.write(fs.context.buffer)
 

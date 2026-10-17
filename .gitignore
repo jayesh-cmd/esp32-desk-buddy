@@ -9,6 +9,10 @@ data/littlefs.bin
 __pycache__/
 *.py[cod]
 
+# Screenshots & temp previews
+Screenshot*.png
+*.preview.png
+
 # OS & Editor noise
 .DS_Store
 Thumbs.db
