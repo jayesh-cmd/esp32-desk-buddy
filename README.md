@@ -1,152 +1,155 @@
-# ESP32 Video & GIF Player 🎬
+# ESP32 Desk Buddy 🎬✍️
 
-A high-performance video and animated GIF player for **ESP32** and **ST7735 (128×160) SPI TFT** displays.
+A project for **ESP32 + ST7735 (128×160) SPI TFT** with two modes:
 
-Convert any video (`.mp4`, `.mov`, `.mkv`) or GIF directly into an optimized filesystem image and flash it to the ESP32 in a single command. The firmware decodes frames from flash memory into an internal 40 KB RAM framebuffer and pushes frames over 27 MHz SPI with smooth, infinite looping.
+1. **Video Player** — Flash any `.mp4` / `.gif` to LittleFS and play it in a loop. Displays an idle background image and plays the video once every 20 minutes.
+2. **Air Draw** ✨ — Draw in the air with your finger in front of your laptop webcam. Whatever you draw appears on the ESP32 display in real-time over USB serial.
 
 ---
 
 ## ✨ Features
 
-* **High-Speed Playback**: Smooth 15–20 fps video playback powered by [BitBank's AnimatedGIF](https://github.com/bitbank2/AnimatedGIF) and [Bodmer's TFT_eSPI](https://github.com/Bodmer/TFT_eSPI).
-* **RAM Framebuffer Compositing**: 40 KB RAM buffer composites delta frames and transparency without flickering, tearing, or black cutouts.
-* **LittleFS Flash Storage**: Videos are stored in the ESP32's onboard flash partition (`~1.4 MB`), avoiding firmware size limits and memory exhaustion.
-* **All-in-One CLI Tool (`flash_video.py`)**:
-  * Converts any video format to 128×160 using FFmpeg.
-  * Adaptive palette optimization (128 colors).
-  * Auto-detects connected ESP32 serial port.
-  * Supports rotation (`--rotate left/right/180`) and fitting (`--fit stretch/crop/pad`).
-  * Generates the LittleFS filesystem image and flashes it via `esptool`.
+- **Smooth Video Playback** via [AnimatedGIF](https://github.com/bitbank2/AnimatedGIF) + [TFT_eSPI](https://github.com/Bodmer/TFT_eSPI) at 15–20 fps
+- **40 KB RAM Framebuffer** — composites delta frames flicker-free
+- **LittleFS Flash Storage** (~1.4 MB partition)
+- **20-Minute Idle Timer** — shows background image, plays video periodically
+- **Air Draw Mode** — real-time finger-drawing via MediaPipe + OpenCV → USB Serial → TFT display
+- **All-in-One Flash CLI** (`flash_video.py`) — convert, rotate, fit, and flash in one command
 
 ---
 
 ## 🛠️ Hardware Requirements & Wiring
 
-* **MCU**: ESP32 Dev Board (ESP-WROOM-32 / ESP32-D0WD)
-* **Display**: 1.8" ST7735 SPI TFT Display (128×160, 1.8V/3.3V logic)
+- **MCU**: ESP32 Dev Board (ESP-WROOM-32)
+- **Display**: 1.8" ST7735 SPI TFT (128×160, 3.3V logic)
 
-### Pinout Connection Table
-
-| Display Pin (ST7735) | ESP32 GPIO | Description |
+| Display Pin | ESP32 GPIO | Description |
 | :--- | :--- | :--- |
-| **VCC** | `3.3V` / `5V` | Display Power |
+| **VCC** | `3.3V` | Power |
 | **GND** | `GND` | Ground |
-| **CS** | `GPIO 5` | Chip Select (VSPI CS) |
-| **RESET / RST** | `GPIO 4` | Display Hardware Reset |
-| **A0 / DC** | `GPIO 2` | Data / Command Control |
-| **SDA / MOSI** | `GPIO 23` | SPI MOSI (Master Out) |
-| **SCK / SCLK** | `GPIO 18` | SPI Clock |
-| **LED / BLK** | `3.3V` | Backlight Anode |
-
-*(SPI Frequency is clocked at 27 MHz in `platformio.ini` for smooth transfers).*
+| **CS** | `GPIO 5` | Chip Select |
+| **RST** | `GPIO 4` | Reset |
+| **DC / A0** | `GPIO 2` | Data/Command |
+| **SDA / MOSI** | `GPIO 23` | SPI Data |
+| **SCK** | `GPIO 18` | SPI Clock |
+| **LED** | `3.3V` | Backlight |
 
 ---
 
 ## 📦 Prerequisites
 
-1. **PlatformIO**: Install via VSCode extension or command line:
-   ```bash
-   brew install platformio    # macOS
-   # or
-   pip install platformio
-   ```
-2. **FFmpeg**: Required for video transcoding:
-   ```bash
-   brew install ffmpeg        # macOS
-   sudo apt install ffmpeg    # Ubuntu/Debian
-   ```
-3. **Python Libraries**:
-   ```bash
-   pip install littlefs-python esptool pyserial
-   ```
+### Firmware
+```bash
+brew install platformio     # macOS
+pip install platformio      # or pip
+```
+
+### Video flashing
+```bash
+brew install ffmpeg
+pip install littlefs-python esptool pyserial
+```
+
+### Air Draw
+```bash
+pip install opencv-python mediapipe pyserial numpy
+```
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Flash the Firmware
-Connect your ESP32 via USB and compile/upload the player firmware:
+### 1. Flash the firmware
 ```bash
 pio run -t upload
 ```
 
-### 2. Flash a Video
-Flash the included sample video (`1015.mp4`):
+### 2. Flash a video
 ```bash
 python3 flash_video.py 1015.mp4 --rotate left --fit stretch
 ```
-* **`--rotate left`**: Rotates 90° counter-clockwise so widescreen videos fill the display when held horizontally.
-* **`--fit stretch`**: Fills the exact 128×160 display area with no black bars.
+The display will reboot and begin the idle → video loop immediately.
 
-Your display will reboot and begin playing the animation immediately in a continuous loop!
-
----
-
-## 🕹️ CLI Usage (`flash_video.py`)
-
-```text
-usage: flash_video.py [-h] [--fps FPS] [--rotate {none,left,right,180}]
-                      [--fit {stretch,crop,pad}] [--port PORT] input
-```
-
-### Options:
 | Flag | Default | Description |
 | :--- | :--- | :--- |
-| `input` | *(required)* | Path to video (`.mp4`, `.mov`) or `.gif` file |
-| `--fps` | `15` | Playback frame rate (10–20 fps recommended) |
-| `--rotate` | `none` | Rotation: `left` (90° CCW), `right` (90° CW), `180`, `none` |
-| `--fit` | `stretch` | Fit mode: `stretch` (full-screen, no bars), `crop`, or `pad` (letterbox) |
-| `--port` | *auto* | Serial port (e.g. `/dev/cu.usbserial-110`); auto-detected if omitted |
-
-### Examples:
-* **Flash another video in widescreen**:
-  ```bash
-  python3 flash_video.py my_clip.mp4 --rotate left --fps 15
-  ```
-* **Flash an existing animated GIF directly**:
-  ```bash
-  python3 flash_video.py animation.gif
-  ```
-* **Longer video with reduced framerate to save space**:
-  ```bash
-  python3 flash_video.py long_clip.mp4 --fps 10
-  ```
+| `--rotate` | `none` | `left` / `right` / `180` |
+| `--fit` | `stretch` | `stretch` / `crop` / `pad` |
+| `--fps` | `15` | Playback frame rate |
+| `--port` | *auto* | Serial port (auto-detected) |
 
 ---
 
-## 🔍 Serial Monitor & Debugging
+## ✍️ Air Draw Mode
 
-To observe real-time frame telemetry, frame delay, and loop cycle counters:
+Draw on the ESP32 display in real-time using your index finger in front of your laptop webcam.
+
+### How it works
+```
+Webcam → MediaPipe hand tracking → Draw canvas → USB Serial → ESP32 → ST7735 display
+```
+
+### Gestures
+
+| Gesture | Action |
+| :--- | :--- |
+| ☝️ Index finger up, middle finger **down** | **Draw** — leaves a trail |
+| 🖐️ Open palm (all fingers up) | **Erase** — clears the canvas |
+| ✊ Fist | **Pause** — lifts the pen |
+| `C` key | Clear canvas |
+| `Q` / `ESC` | Quit |
+
+### Usage
+```bash
+# Auto-detect ESP32 port
+python3 air_draw.py
+
+# Specify port manually
+python3 air_draw.py --port /dev/cu.usbserial-0001
+
+# Change draw color (RGB)
+python3 air_draw.py --color 255 100 0    # orange
+
+# Test without ESP32 connected (preview only)
+python3 air_draw.py --no-send
+```
+
+### What you see
+The script opens a split preview window:
+- **Left panel**: Mirrored webcam feed with your drawing overlaid
+- **Right panel**: Exact pixel preview of what's on the 128×160 display
+- **HUD**: Shows current mode (DRAW / ERASE / IDLE) and connection status
+
+### How the ESP32 switches modes
+- **Idle/Video loop** runs by default after boot
+- When `air_draw.py` starts sending frames, the ESP32 **automatically detects** the magic header and enters draw mode
+- When you quit `air_draw.py`, the ESP32 **automatically returns** to the idle screen after 2 seconds of no data
+
+No reflashing needed to switch between video and air-draw modes.
+
+---
+
+## 🔍 Serial Monitor
+
 ```bash
 pio device monitor --baud 115200
-```
-Expected output:
-```text
-=== ESP32 GIF PLAYER BOOT ===
-LittleFS mounted OK.
-GIF opened! Canvas: 128x160
-Starting animation loop...
-Cycle 1: frame 20 (delay 66 ms)
-Cycle 1: frame 40 (delay 66 ms)
-...
-Cycle 1 completed (150 frames). Looping...
 ```
 
 ---
 
 ## 📂 Project Structure
 
-```text
-├── 1015.mp4           # Included sample video
-├── data/              # LittleFS filesystem source (contains anim.gif)
-├── flash_video.py     # All-in-one transcoding and flashing CLI
-├── platformio.ini     # Hardware pins, build flags & libraries configuration
+```
+├── 1015.mp4            # Sample video
+├── air_draw.py         # Air-drawing host script (OpenCV + MediaPipe)
+├── flash_video.py      # Video flashing CLI
+├── data/               # LittleFS source files (anim.gif, idle.bin)
+├── platformio.ini      # Build config, pins, libraries
 ├── src/
-│   └── main.cpp       # ESP32 firmware (LittleFS reader + AnimatedGIF player)
+│   └── main.cpp        # ESP32 firmware (video + air-draw serial receiver)
 └── README.md
 ```
 
 ---
 
 ## 📄 License
-MIT License. Free to use and modify for personal and commercial projects.
+MIT — free to use and modify.
