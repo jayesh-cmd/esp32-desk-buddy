@@ -1,155 +1,140 @@
-# ESP32 Desk Buddy 🎬✍️
+# ESP32 Desk Buddy & Air-Draw 🎬✍️
 
-A project for **ESP32 + ST7735 (128×160) SPI TFT** with two modes:
+An interactive desk companion powered by an **ESP32** and a **1.8" ST7735 SPI TFT display (160×128)** featuring two seamless operating modes:
 
-1. **Video Player** — Flash any `.mp4` / `.gif` to LittleFS and play it in a loop. Displays an idle background image and plays the video once every 20 minutes.
-2. **Air Draw** ✨ — Draw in the air with your finger in front of your laptop webcam. Whatever you draw appears on the ESP32 display in real-time over USB serial.
+1. **Air-Draw Mode (Wireless Stylus)** ✨ — Point your finger in front of your webcam and hold the **`Fn`** or **`Command (⌘)`** key to draw on the mini display in real-time over high-speed USB Serial.
+2. **Desk Buddy Mode (Autonomous Animation)** 🐾 — Displays a full-screen idle image on your desk and periodically wakes up every 20 minutes to play an animated character video loop.
 
----
-
-## ✨ Features
-
-- **Smooth Video Playback** via [AnimatedGIF](https://github.com/bitbank2/AnimatedGIF) + [TFT_eSPI](https://github.com/Bodmer/TFT_eSPI) at 15–20 fps
-- **40 KB RAM Framebuffer** — composites delta frames flicker-free
-- **LittleFS Flash Storage** (~1.4 MB partition)
-- **20-Minute Idle Timer** — shows background image, plays video periodically
-- **Air Draw Mode** — real-time finger-drawing via MediaPipe + OpenCV → USB Serial → TFT display
-- **All-in-One Flash CLI** (`flash_video.py`) — convert, rotate, fit, and flash in one command
+No re-flashing or button-pressing needed to switch modes! Launching `air_draw.py` immediately takes over the display, and closing it automatically returns the device to your desk buddy loop after 3 seconds.
 
 ---
 
-## 🛠️ Hardware Requirements & Wiring
+## ✨ Key Features
 
-- **MCU**: ESP32 Dev Board (ESP-WROOM-32)
-- **Display**: 1.8" ST7735 SPI TFT (128×160, 3.3V logic)
+- **Real-Time Air-Writing**: Powered by Google MediaPipe hand tracking + OpenCV with zero-lag hardware key detection (`Fn` or `⌘` to draw).
+- **Lightweight Vector Protocol**: Tiny 10-byte draw packets (`CMD_LINE`, `CMD_ERASE`, `CMD_ROTATE`) streaming over standard 115200 baud serial — zero buffer overflow, rock-solid stability.
+- **Horizontal Landscape Display**: Optimized for widescreen 160×128 orientation on your desk, with instant 180° rotation toggling (`R` key).
+- **Non-Blocking Architecture**: Background daemon serial worker with thread-safe queues ensures the webcam feed runs at full 30+ FPS without stuttering.
+- **Color Palette**: Switch between 6 vibrant drawing colors on the fly (`1` to `6`).
+- **Autonomous Video Player**: Plays animated GIFs stored in LittleFS flash storage with flicker-free composite RAM framebuffering.
+- **CLI Video Converter & Flasher** (`flash_video.py`): Convert any `.mp4` or `.gif`, crop/scale, generate LittleFS image, and flash to ESP32 in a single command.
+
+---
+
+## 🛠️ Hardware Requirements & Pinout
+
+- **Microcontroller**: ESP32 Dev Board (ESP-WROOM-32)
+- **Display**: 1.8" ST7735 SPI TFT (128×160 native, driven in 160×128 landscape)
+- **Host**: Laptop / PC with webcam (macOS, Linux, or Windows)
 
 | Display Pin | ESP32 GPIO | Description |
 | :--- | :--- | :--- |
-| **VCC** | `3.3V` | Power |
+| **VCC** | `3.3V` / `5V` | Power (check display rating) |
 | **GND** | `GND` | Ground |
-| **CS** | `GPIO 5` | Chip Select |
-| **RST** | `GPIO 4` | Reset |
-| **DC / A0** | `GPIO 2` | Data/Command |
-| **SDA / MOSI** | `GPIO 23` | SPI Data |
+| **CS** | `GPIO 5` | SPI Chip Select |
+| **RST** | `GPIO 4` | Display Reset |
+| **DC / A0** | `GPIO 2` | Data / Command Select |
+| **SDA / MOSI** | `GPIO 23` | SPI MOSI Data |
 | **SCK** | `GPIO 18` | SPI Clock |
-| **LED** | `3.3V` | Backlight |
+| **LED** | `3.3V` | Backlight Anode |
 
 ---
 
-## 📦 Prerequisites
+## 📦 Installation & Setup
 
-### Firmware
+### 1. Install Firmware Toolchain
+Install [PlatformIO](https://platformio.org/):
 ```bash
-brew install platformio     # macOS
-pip install platformio      # or pip
+brew install platformio    # macOS (Homebrew)
+# or: pip install platformio
 ```
 
-### Video flashing
-```bash
-brew install ffmpeg
-pip install littlefs-python esptool pyserial
-```
-
-### Air Draw
+### 2. Install Python Dependencies
 ```bash
 pip install opencv-python mediapipe pyserial numpy
+```
+
+*(Optional for video flashing CLI)*:
+```bash
+brew install ffmpeg
+pip install littlefs-python esptool
 ```
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Flash the firmware
+### 1. Flash Firmware to ESP32
+Connect your ESP32 via USB and run:
 ```bash
 pio run -t upload
 ```
+The ESP32 will boot, mount LittleFS, and show the desk buddy idle screen.
 
-### 2. Flash a video
+### 2. Launch Air-Draw
+Run the air-drawing script:
 ```bash
-python3 flash_video.py 1015.mp4 --rotate left --fit stretch
-```
-The display will reboot and begin the idle → video loop immediately.
-
-| Flag | Default | Description |
-| :--- | :--- | :--- |
-| `--rotate` | `none` | `left` / `right` / `180` |
-| `--fit` | `stretch` | `stretch` / `crop` / `pad` |
-| `--fps` | `15` | Playback frame rate |
-| `--port` | *auto* | Serial port (auto-detected) |
-
----
-
-## ✍️ Air Draw Mode
-
-Draw on the ESP32 display in real-time using your index finger in front of your laptop webcam.
-
-### How it works
-```
-Webcam → MediaPipe hand tracking → Draw canvas → USB Serial → ESP32 → ST7735 display
-```
-
-### Gestures
-
-| Gesture | Action |
-| :--- | :--- |
-| ☝️ Index finger up, middle finger **down** | **Draw** — leaves a trail |
-| 🖐️ Open palm (all fingers up) | **Erase** — clears the canvas |
-| ✊ Fist | **Pause** — lifts the pen |
-| `C` key | Clear canvas |
-| `Q` / `ESC` | Quit |
-
-### Usage
-```bash
-# Auto-detect ESP32 port
 python3 air_draw.py
-
-# Specify port manually
-python3 air_draw.py --port /dev/cu.usbserial-0001
-
-# Change draw color (RGB)
-python3 air_draw.py --color 255 100 0    # orange
-
-# Test without ESP32 connected (preview only)
-python3 air_draw.py --no-send
 ```
+The script auto-detects your ESP32 serial port (`/dev/cu.usbserial-*` or `COM*`), clears the display, rotates to horizontal mode, and starts drawing!
 
-### What you see
-The script opens a split preview window:
-- **Left panel**: Mirrored webcam feed with your drawing overlaid
-- **Right panel**: Exact pixel preview of what's on the 128×160 display
-- **HUD**: Shows current mode (DRAW / ERASE / IDLE) and connection status
-
-### How the ESP32 switches modes
-- **Idle/Video loop** runs by default after boot
-- When `air_draw.py` starts sending frames, the ESP32 **automatically detects** the magic header and enters draw mode
-- When you quit `air_draw.py`, the ESP32 **automatically returns** to the idle screen after 2 seconds of no data
-
-No reflashing needed to switch between video and air-draw modes.
+```bash
+# Optional flags:
+python3 air_draw.py --cam 0              # Specify webcam index
+python3 air_draw.py --port /dev/cu.usbserial-10   # Specify serial port
+python3 air_draw.py --no-send            # Test camera & gestures without ESP32
+```
 
 ---
 
-## 🔍 Serial Monitor
+## ✍️ Air-Draw Controls & Shortcuts
+
+| Action | Control | Description |
+| :--- | :--- | :--- |
+| **Draw (Pen Down)** | **Hold `Fn`** or **`Command ⌘`** | Moves stylus and leaves a crisp vector line |
+| **Hover (Pen Up)** | **Release button** | Reposition your finger across the canvas without drawing |
+| **Clear Canvas** | **Key `C`** | Erases both the preview and the ESP32 screen |
+| **Flip Screen 180°** | **Key `R`** | Switches between Right-Side Landscape (`3`) and Left-Side Landscape (`1`) |
+| **Change Colors** | **Keys `1` – `6`** | `1` Cyan, `2` Green, `3` Yellow, `4` Orange, `5` Pink, `6` White |
+| **Quit** | **Key `Q`** or **`ESC`** | Exits cleanly; ESP32 automatically returns to idle desk buddy mode |
+
+---
+
+## 🎬 Flashing Custom Desk Buddy Videos
+
+To convert and flash a new video/animation onto the LittleFS partition:
 
 ```bash
-pio device monitor --baud 115200
+python3 flash_video.py your_video.mp4 --rotate left --fit stretch
 ```
+
+| Parameter | Default | Options / Description |
+| :--- | :--- | :--- |
+| `--rotate` | `none` | `none`, `left`, `right`, `180` (matches physical mounting) |
+| `--fit` | `stretch` | `stretch`, `crop`, `pad` |
+| `--fps` | `15` | Target animation frame rate |
+| `--port` | *auto* | Serial port (auto-detected if omitted) |
 
 ---
 
 ## 📂 Project Structure
 
 ```
-├── 1015.mp4            # Sample video
-├── air_draw.py         # Air-drawing host script (OpenCV + MediaPipe)
-├── flash_video.py      # Video flashing CLI
-├── data/               # LittleFS source files (anim.gif, idle.bin)
-├── platformio.ini      # Build config, pins, libraries
+├── air_draw.py         # Air-drawing host app (OpenCV, MediaPipe, Quartz key capture)
+├── flash_video.py      # Automated video converter & LittleFS flashing CLI
+├── platformio.ini      # PlatformIO build configuration, SPI pins & libraries
+├── data/               # LittleFS filesystem assets
+│   ├── anim.gif        # Video animation played periodically
+│   └── idle.bin        # Full-screen idle background image
 ├── src/
-│   └── main.cpp        # ESP32 firmware (video + air-draw serial receiver)
-└── README.md
+│   ├── main.cpp        # Firmware: dual-mode state machine & ST7735 driver
+│   └── idle_bg.h       # Fallback idle background array
+├── .gitignore          # Ignores build artifacts and raw media
+└── README.md           # Documentation
 ```
 
 ---
 
 ## 📄 License
-MIT — free to use and modify.
+
+MIT License — free to use, modify, and build upon.

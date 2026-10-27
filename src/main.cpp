@@ -7,14 +7,16 @@
 #define GIF_W 128
 #define GIF_H 160
 
-// ── Serial frame protocol ─────────────────────────────────────────────────
-// Header: 0xDE 0xAD + 2-byte little-endian payload size (40960)
-#define FRAME_MAGIC_0   0xDE
-#define FRAME_MAGIC_1   0xAD
-#define FRAME_PAYLOAD   (GIF_W * GIF_H * 2)   // 40 960 bytes
+// ── Serial draw command protocol ──────────────────────────────────────────
+#define MAGIC_0             0xAB
+#define MAGIC_1             0xCD
+#define CMD_LINE            0x01   // x0, y0, x1, y1, r, g, b
+#define CMD_ERASE           0x02   // clear screen to black
+#define CMD_SYNC            0x03   // keepalive / sync
+#define CMD_ROTATE          0x04   // rotation: 0=portrait, 1=landscape, 2=inv portrait, 3=inv landscape
 
 // How long with no serial data before returning to idle/video loop (ms)
-#define AIRDRAW_TIMEOUT_MS  2000
+#define AIRDRAW_TIMEOUT_MS  3000
 
 // Time to stay on the idle screen between video plays (default: 20 minutes)
 const unsigned long IDLE_INTERVAL_MS = 20UL * 60UL * 1000UL;
@@ -129,80 +131,117 @@ void playVideoOnce() {
   Serial.printf("Video playback complete (%d frames).\n", frameCount);
 }
 
+// ── Draw Brush Helper ─────────────────────────────────────────────────────────
+void drawBrush(int x0, int y0, int x1, int y1, uint16_t color, int r = 0) {
+  tft.drawLine(x0, y0, x1, y1, color);
+  for (int d = 1; d <= r; d++) {
+    tft.drawLine(x0 - d, y0, x1 - d, y1, color);
+    tft.drawLine(x0 + d, y0, x1 + d, y1, color);
+    tft.drawLine(x0, y0 - d, x1, y1 - d, color);
+    tft.drawLine(x0, y0 + d, x1, y1 + d, color);
+  }
+  if (r > 0) {
+    tft.fillCircle(x0, y0, r, color);
+    tft.fillCircle(x1, y1, r, color);
+  }
+}
+
 // ── Air-Draw Mode ─────────────────────────────────────────────────────────────
-// Reads raw RGB565 frames sent by air_draw.py over USB Serial.
-// Protocol: 0xDE 0xAD + 2-byte little-endian size (40960) + payload bytes.
-// Returns when no data is received for AIRDRAW_TIMEOUT_MS milliseconds.
+// Receives lightweight draw commands (CMD_LINE, CMD_ERASE, CMD_SYNC)
+// from air_draw.py over 115200 baud Serial.
+enum ParserState {
+  STATE_MAGIC_0,
+  STATE_MAGIC_1,
+  STATE_CMD,
+  STATE_ARGS
+};
 
 void runAirDrawMode() {
-  Serial.println("[AirDraw] Entering air-draw mode...");
+  Serial.println("[AirDraw] Mode active — horizontal landscape drawing.");
+  // Default to right-side landscape rotation (3)
+  tft.setRotation(3);
+  tft.fillScreen(TFT_BLACK);
 
-  uint8_t  rxBuf[FRAME_PAYLOAD];   // receive buffer for one frame
+  ParserState state = STATE_MAGIC_0;
+  uint8_t currentCmd = 0;
+  uint8_t argBuf[8];
+  uint8_t argIdx = 0;
+  uint8_t argExpected = 0;
+
   uint32_t lastDataTime = millis();
-  bool     inHeader     = false;
-  uint8_t  headerIdx    = 0;       // 0..3 : step through magic + size bytes
-  uint32_t expectedSize = 0;
-  uint32_t rxCount      = 0;
 
-  // State machine states
-  enum State { WAIT_MAGIC0, WAIT_MAGIC1, READ_SIZE_LO, READ_SIZE_HI, READ_PAYLOAD };
-  State state = WAIT_MAGIC0;
+  while (millis() - lastDataTime < AIRDRAW_TIMEOUT_MS) {
+    while (Serial.available()) {
+      int b = Serial.read();
+      if (b < 0) break;
+      uint8_t byte = (uint8_t)b;
+      lastDataTime = millis();
 
-  while (true) {
-    // Check timeout — return to idle loop if laptop goes silent
-    if (millis() - lastDataTime > AIRDRAW_TIMEOUT_MS) {
-      Serial.println("[AirDraw] Timeout — returning to idle loop.");
-      return;
+      switch (state) {
+        case STATE_MAGIC_0:
+          if (byte == MAGIC_0) state = STATE_MAGIC_1;
+          break;
+
+        case STATE_MAGIC_1:
+          if (byte == MAGIC_1) {
+            state = STATE_CMD;
+          } else if (byte == MAGIC_0) {
+            state = STATE_MAGIC_1;
+          } else {
+            state = STATE_MAGIC_0;
+          }
+          break;
+
+        case STATE_CMD:
+          currentCmd = byte;
+          if (currentCmd == CMD_LINE) {
+            state = STATE_ARGS;
+            argExpected = 7;
+            argIdx = 0;
+          } else if (currentCmd == CMD_ROTATE) {
+            state = STATE_ARGS;
+            argExpected = 1;
+            argIdx = 0;
+          } else if (currentCmd == CMD_ERASE) {
+            tft.fillScreen(TFT_BLACK);
+            state = STATE_MAGIC_0;
+          } else if (currentCmd == CMD_SYNC) {
+            state = STATE_MAGIC_0;
+          } else {
+            state = STATE_MAGIC_0;
+          }
+          break;
+
+        case STATE_ARGS:
+          argBuf[argIdx++] = byte;
+          if (argIdx >= argExpected) {
+            if (currentCmd == CMD_LINE) {
+              uint8_t x0    = argBuf[0];
+              uint8_t y0    = argBuf[1];
+              uint8_t x1    = argBuf[2];
+              uint8_t y1    = argBuf[3];
+              uint8_t r     = argBuf[4];
+              uint8_t g     = argBuf[5];
+              uint8_t b_col = argBuf[6];
+              uint16_t col  = tft.color565(r, g, b_col);
+              drawBrush(x0, y0, x1, y1, col, 0);
+            } else if (currentCmd == CMD_ROTATE) {
+              uint8_t rot = argBuf[0] % 4;
+              tft.setRotation(rot);
+              tft.fillScreen(TFT_BLACK);
+            }
+            state = STATE_MAGIC_0;
+          }
+          break;
+      }
     }
-
-    if (!Serial.available()) {
-      yield();
-      continue;
-    }
-
-    uint8_t b = (uint8_t)Serial.read();
-    lastDataTime = millis();
-
-    switch (state) {
-      case WAIT_MAGIC0:
-        if (b == FRAME_MAGIC_0) state = WAIT_MAGIC1;
-        break;
-
-      case WAIT_MAGIC1:
-        if (b == FRAME_MAGIC_1) state = READ_SIZE_LO;
-        else                    state = WAIT_MAGIC0;   // re-sync
-        break;
-
-      case READ_SIZE_LO:
-        expectedSize = b;          // low byte of payload size
-        state = READ_SIZE_HI;
-        break;
-
-      case READ_SIZE_HI:
-        expectedSize |= ((uint32_t)b << 8);   // high byte
-        if (expectedSize == FRAME_PAYLOAD) {
-          rxCount = 0;
-          state   = READ_PAYLOAD;
-        } else {
-          // Unexpected size — re-sync
-          Serial.printf("[AirDraw] Bad size %u, re-syncing.\n", expectedSize);
-          state = WAIT_MAGIC0;
-        }
-        break;
-
-      case READ_PAYLOAD:
-        rxBuf[rxCount++] = b;
-        if (rxCount >= FRAME_PAYLOAD) {
-          // Full frame received — copy to frameBuf and push to display
-          memcpy(frameBuf, rxBuf, FRAME_PAYLOAD);
-          // RGB565 bytes arrive big-endian from Python (byteswap already done)
-          // TFT_eSPI pushColors with swapBytes=true handles big-endian correctly
-          flushFrameBuf();
-          state = WAIT_MAGIC0;   // ready for next frame
-        }
-        break;
-    }
+    yield();
+    delay(2);
   }
+
+  // Restore portrait rotation for idle background and video
+  tft.setRotation(0);
+  Serial.println("[AirDraw] Session ended — restoring idle.");
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
@@ -214,7 +253,7 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println("\n=== ESP32 DESK BUDDY BOOT ===");
-  Serial.println("Send air-draw frames within 2s to enter drawing mode.");
+  Serial.println("Air-Draw ready @ 115200 baud.");
 
   if (!LittleFS.begin()) {
     Serial.println("WARNING: LittleFS mount failed (will use fallback idle background)");
@@ -233,21 +272,18 @@ void setup() {
 int cycleCount = 0;
 
 void loop() {
-  // ── Check for incoming air-draw frames ──────────────────────────────────
-  // If the laptop sends the magic header within the first 200 ms of the loop
-  // iteration, switch to air-draw mode until the laptop goes silent.
+  // Check for incoming air-draw start
   if (Serial.available()) {
-    // Peek at the first byte — if it looks like our magic, enter draw mode
-    int peeked = Serial.peek();
-    if (peeked == FRAME_MAGIC_0) {
+    if (Serial.peek() == MAGIC_0) {
       runAirDrawMode();
-      // After drawing session ends, restore idle background
       showIdleScreen();
       return;
+    } else {
+      Serial.read();
     }
   }
 
-  // ── Normal idle + periodic video loop ────────────────────────────────────
+  // Normal idle + periodic video loop
   showIdleScreen();
   cycleCount++;
   Serial.printf("\n[Cycle %d] Idle active. Next video in %lu min...\n",
@@ -257,15 +293,18 @@ void loop() {
   unsigned long lastPrint = startWait;
 
   while (millis() - startWait < IDLE_INTERVAL_MS) {
-    delay(200);
-    yield();
-
-    // Check for incoming air-draw frames during the wait
-    if (Serial.available() && Serial.peek() == FRAME_MAGIC_0) {
-      runAirDrawMode();
-      showIdleScreen();
-      return;   // restart loop() to reset timer
+    if (Serial.available()) {
+      if (Serial.peek() == MAGIC_0) {
+        runAirDrawMode();
+        showIdleScreen();
+        return;
+      } else {
+        Serial.read();
+      }
     }
+
+    delay(20);
+    yield();
 
     // Serial heartbeat every minute
     if (millis() - lastPrint >= 60000UL) {
@@ -275,7 +314,7 @@ void loop() {
     }
   }
 
-  // ── Play video ────────────────────────────────────────────────────────────
+  // Play video
   Serial.println("\n>>> Desk Buddy is walking! <<<");
   playVideoOnce();
 }

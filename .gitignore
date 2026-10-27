@@ -9,7 +9,9 @@ data/littlefs.bin
 __pycache__/
 *.py[cod]
 
-# Screenshots & temp previews
+# Media sources & captures
+*.mp4
+*.mov
 Screenshot*.png
 *.preview.png
 
